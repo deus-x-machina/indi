@@ -67,7 +67,10 @@ double PMC8_AXIS1_SCALE = PMC8_EXOS2_AXIS1_SCALE;
 #define PMC8_MAX_PRECISE_MOTOR_RATE 2621
 
 // set max settable slew rate as move rate as 256x sidereal
-#define PMC8_MAX_MOVE_MOTOR_RATE (256*15)
+#define PMC8_MAX_MOVE_RATE (100*15)
+
+// according to latest dev reference doc limit is 40000
+#define PMC8_MAX_SLEW_MOTOR_RATE 40000
 
 // if tracking speed above this then mount is slewing
 // NOTE -       55 is fine since sidereal rate is 53 in these units
@@ -418,7 +421,8 @@ bool get_pmc8_tracking_rate_axis(int fd, PMC8_AXIS axis, int &rate)
     strcpy(num_str, "0X");
     strncat(num_str, response+5, 6);
 
-    rate = (int)strtol(num_str, nullptr, 0);
+    // divide by multiplier of 25 as per spec
+    rate = (int)(strtol(num_str, nullptr, 0) / 25);
 
     return true;
 }
@@ -577,16 +581,16 @@ int convert_movespeedindex_to_rate(int mode)
     switch (mode)
     {
         case 0:
-            r = 4*15;
+            r = 5*15;
             break;
         case 1:
-            r = 16*15;
+            r = 20*15;
             break;
         case 2:
-            r = 64*15;
+            r = 50*15;
             break;
         case 3:
-            r = 256*15;
+            r = 100*15;
             break;
         default:
             r = 0;
@@ -619,10 +623,10 @@ bool start_pmc8_motion(int fd, PMC8_DIRECTION dir, int mode)
 
     reqrate = convert_movespeedindex_to_rate(mode);
 
-    if (reqrate > PMC8_MAX_MOVE_MOTOR_RATE)
-        reqrate = PMC8_MAX_MOVE_MOTOR_RATE;
-    else if (reqrate < -PMC8_MAX_MOVE_MOTOR_RATE)
-        reqrate = -PMC8_MAX_MOVE_MOTOR_RATE;
+    if (reqrate > PMC8_MAX_MOVE_RATE)
+        reqrate = PMC8_MAX_MOVE_RATE;
+    else if (reqrate < -PMC8_MAX_MOVE_RATE)
+        reqrate = -PMC8_MAX_MOVE_RATE;
 
     switch (dir)
     {
@@ -729,12 +733,13 @@ bool convert_precise_rate_to_motor(float rate, int *mrate)
 bool convert_move_rate_to_motor(float rate, int *mrate)
 {
 
-    *mrate = (int)(rate*(PMC8_AXIS0_SCALE/ARCSEC_IN_CIRCLE));
+    *mrate = (int)(25*rate*(PMC8_AXIS0_SCALE/ARCSEC_IN_CIRCLE));
 
-    if (*mrate > PMC8_MAX_MOVE_MOTOR_RATE)
-        *mrate = PMC8_MAX_MOVE_MOTOR_RATE;
-    else if (*mrate < -PMC8_MAX_MOVE_MOTOR_RATE)
-        *mrate = -PMC8_MAX_MOVE_MOTOR_RATE;
+    // we now have motor counts
+    if (*mrate > PMC8_MAX_SLEW_MOTOR_RATE)
+        *mrate = PMC8_MAX_SLEW_MOTOR_RATE;
+    else if (*mrate < 0)
+        *mrate = 0;
 
     return true;
 }
@@ -753,6 +758,13 @@ bool convert_motor_rate_to_move_rate(int mrate, float *rate)
 //      response comes from controller, since next command will flush before data is in buffer!
 bool set_pmc8_axis_motor_rate(int fd, PMC8_AXIS axis, int mrate, bool fast)
 {
+    if (mrate < 0){
+        mrate = 0;
+    }
+    if (mrate > PMC8_MAX_SLEW_MOTOR_RATE){
+        mrate = PMC8_MAX_SLEW_MOTOR_RATE;
+    }
+
     char cmd[24];
     int errcode = 0;
     char errmsg[MAXRBUF];
@@ -976,6 +988,7 @@ bool set_pmc8_custom_dec_track_rate(int fd, double rate)
 }
 #endif
 
+// rate in arcsec/sec
 bool set_pmc8_custom_ra_move_rate(int fd, double rate)
 {
     bool rc;
@@ -983,7 +996,7 @@ bool set_pmc8_custom_ra_move_rate(int fd, double rate)
     DEBUGFDEVICE(pmc8_device, INDI::Logger::DBG_DEBUG, "set_pmc8_custom_ra move_rate() called rate=%f ", rate);
 
     // safe guard for now - only all use to STOP slewing or MOVE commands with this
-    if (fabs(rate) > PMC8_MAX_MOVE_MOTOR_RATE)
+    if (fabs(rate) > PMC8_MAX_MOVE_RATE)
     {
         DEBUGDEVICE(pmc8_device, INDI::Logger::DBG_ERROR, "set_pmc8_custom_ra_move rate only supports low rates currently");
 
@@ -995,6 +1008,7 @@ bool set_pmc8_custom_ra_move_rate(int fd, double rate)
     return rc;
 }
 
+// rate in arcsec/sec
 bool set_pmc8_custom_dec_move_rate(int fd, double rate)
 {
     bool rc;
@@ -1002,7 +1016,7 @@ bool set_pmc8_custom_dec_move_rate(int fd, double rate)
     DEBUGFDEVICE(pmc8_device, INDI::Logger::DBG_DEBUG, "set_pmc8_custom_dec_move_rate() called rate=%f ", rate);
 
     // safe guard for now - only all use to STOP slewing with this
-    if (fabs(rate) > PMC8_MAX_MOVE_MOTOR_RATE)
+    if (fabs(rate) > PMC8_MAX_MOVE_RATE)
     {
         DEBUGDEVICE(pmc8_device, INDI::Logger::DBG_ERROR, "set_pmc8_custom_dec_move_rate only supports low rates currently");
         return false;

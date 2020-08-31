@@ -28,17 +28,22 @@
 #include "pmc8driver.h"
 #include "indiguiderinterface.h"
 #include "inditelescope.h"
+#include "alignment/AlignmentSubsystemForDrivers.h"
 
-class PMC8 : public INDI::Telescope, public INDI::GuiderInterface
+#include <libnova/ln_types.h>
+
+class PMC8 : public INDI::Telescope, public INDI::GuiderInterface, INDI::AlignmentSubsystem::AlignmentSubsystemForDrivers
 {
     public:
 
         PMC8();
-        ~PMC8() override;
+//        ~PMC8() override;
+        virtual ~PMC8() = default;
 
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
-
+        virtual bool ISNewBLOB (const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n) override;
+        virtual bool ISNewText (const char *dev, const char *name, char *texts[], char *names[], int n) override;
         virtual void ISGetProperties(const char *dev) override;
 
     protected:
@@ -142,6 +147,8 @@ class PMC8 : public INDI::Telescope, public INDI::GuiderInterface
 
         //PMC8Info scopeInfo;
         FirmwareInfo firmwareInfo;
+
+        void convertToLHA(ln_equ_posn in, ln_equ_posn out);
 };
 
 

@@ -48,6 +48,10 @@
 #define PMC8_DEFAULT_PORT 54372
 #define PMC8_DEFAULT_IP_ADDRESS "192.168.47.1"
 
+#define MIN_ALIGNMENT_POINTS 2
+
+using namespace INDI::AlignmentSubsystem;
+
 static std::unique_ptr<PMC8> scope(new PMC8());
 
 void ISGetProperties(const char *dev)
@@ -73,14 +77,7 @@ void ISNewNumber(const char *dev, const char *name, double values[], char *names
 void ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[],
                char *names[], int n)
 {
-    INDI_UNUSED(dev);
-    INDI_UNUSED(name);
-    INDI_UNUSED(sizes);
-    INDI_UNUSED(blobsizes);
-    INDI_UNUSED(blobs);
-    INDI_UNUSED(formats);
-    INDI_UNUSED(names);
-    INDI_UNUSED(n);
+    scope->ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
 }
 
 void ISSnoopDevice(XMLEle *root)
@@ -101,11 +98,7 @@ PMC8::PMC8()
                            TELESCOPE_HAS_LOCATION,
                            4);
 
-    setVersion(0, 3);
-}
-
-PMC8::~PMC8()
-{
+    setVersion(0, 4);
 }
 
 const char *PMC8::getDefaultName()
@@ -132,6 +125,9 @@ bool PMC8::initProperties()
     IUFillSwitchVector(&MountTypeSP, MountTypeS, 3, getDeviceName(), "MOUNT_TYPE", "Mount Type", CONNECTION_TAB,
                        IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
+    // Number of alignment points
+
+
     // No need to guess mount type from device name here, can wait until after we get firmware
     /*if (strstr(getDeviceName(), "EXOS2"))
         MountTypeS[MOUNT_EXOS2].s = ISS_ON;
@@ -154,10 +150,10 @@ bool PMC8::initProperties()
     //    TrackRateN[AXIS_DE].max = 0.01;
 
     // relabel move speeds
-    strcpy(SlewRateSP.sp[0].label, "4x");
-    strcpy(SlewRateSP.sp[1].label, "16x");
-    strcpy(SlewRateSP.sp[2].label, "64x");
-    strcpy(SlewRateSP.sp[3].label, "256x");
+    strcpy(SlewRateSP.sp[0].label, "5x");
+    strcpy(SlewRateSP.sp[1].label, "20x");
+    strcpy(SlewRateSP.sp[2].label, "50x");
+    strcpy(SlewRateSP.sp[3].label, "100x");
 
     /* How fast do we guide compared to sidereal rate */
     IUFillNumber(&GuideRateN[0], "GUIDE_RATE", "x Sidereal", "%g", 0.1, 1.0, 0.1, 0.5);
@@ -179,6 +175,9 @@ bool PMC8::initProperties()
     IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(), "Firmware", "Firmware", MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
 
     setDriverInterface(getDriverInterface() | GUIDER_INTERFACE);
+
+    // Add alignment properties
+    InitAlignmentProperties(this);
 
     return true;
 }
@@ -332,6 +331,9 @@ bool PMC8::ISNewNumber(const char *dev, const char *name, double values[], char 
             processGuiderProperties(name, values, names, n);
             return true;
         }
+
+        // Process alignment properties
+        ProcessNumberProperties(this, name, values, names, n);
     }
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
@@ -347,6 +349,7 @@ bool PMC8::ISNewSwitch(const char *dev, const char *name, ISState *states, char 
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
+
         if (strcmp(name, MountTypeSP.name) == 0)
         {
             IUUpdateSwitch(&MountTypeSP, states, names, n);
@@ -367,10 +370,33 @@ bool PMC8::ISNewSwitch(const char *dev, const char *name, ISState *states, char 
             return true;
         }
 
-
+        // Process alignment properties
+        INDI::AlignmentSubsystem::MathPluginManagement::ProcessSwitchProperties(this, name, states, names, n);
     }
 
     return INDI::Telescope::ISNewSwitch(dev, name, states, names, n);
+}
+
+bool PMC8::ISNewBLOB (const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n)
+{
+    if(!strcmp(dev,getDeviceName()))
+    {
+        // Process alignment properties
+        ProcessBlobProperties(this, name, sizes, blobsizes, blobs, formats, names, n);
+    }
+    // Pass it up the chain
+    return INDI::Telescope::ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
+}
+
+bool PMC8::ISNewText (const char *dev, const char *name, char *texts[], char *names[], int n)
+{
+    if(!strcmp(dev,getDeviceName()))
+    {
+        // Process alignment properties
+        ProcessTextProperties(this, name, texts, names, n);
+    }
+    // Pass it up the chain
+    return INDI::Telescope::ISNewText(dev, name, texts, names, n);
 }
 
 bool PMC8::ReadScopeStatus()
@@ -417,7 +443,6 @@ bool PMC8::ReadScopeStatus()
 
         case SCOPE_PARKING:
             // are we done?
-            // are we done?
 
             // check slew state
             rc = get_pmc8_is_scope_slewing(PortFD, slewing);
@@ -443,32 +468,67 @@ bool PMC8::ReadScopeStatus()
             break;
     }
 
-    rc = get_pmc8_coords(PortFD, currentRA, currentDEC);
+    ln_equ_posn eq { 0, 0 };
+    rc = get_pmc8_coords(PortFD, eq.ra, eq.dec);
+    if (!rc){
+        return false;
+    }
 
-    if (rc)
-        NewRaDec(currentRA, currentDEC);
+    if (GetAlignmentDatabase().size() >= MIN_ALIGNMENT_POINTS){
 
-    return rc;
+        double LST = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+
+        ln_equ_posn RaDec { 0, 0 };
+        RaDec.ra = (LST - eq.ra) * 360.0 / 24;
+        RaDec.dec = eq.dec;
+
+        TelescopeDirectionVector TDV = TelescopeDirectionVectorFromLocalHourAngleDeclination(RaDec);
+        TransformTelescopeToCelestial(TDV, eq.ra, eq.dec);
+    }
+
+    NewRaDec(eq.ra, eq.dec);
+
+    return true;
 }
 
 bool PMC8::Goto(double r, double d)
 {
     char RAStr[64] = {0}, DecStr[64] = {0};
+    fs_sexa(RAStr, r, 2, 3600);
+    fs_sexa(DecStr, d, 2, 3600);
+    DEBUGF(INDI::Logger::DBG_SESSION, "Goto to RA: %s - DEC: %s", RAStr, DecStr);
 
-    targetRA  = r;
-    targetDEC = d;
+    ln_equ_posn RaDec { 0, 0 };
+    TelescopeDirectionVector TDV;
 
-    fs_sexa(RAStr, targetRA, 2, 3600);
-    fs_sexa(DecStr, targetDEC, 2, 3600);
+    if (GetAlignmentDatabase().size() >= MIN_ALIGNMENT_POINTS && TransformCelestialToTelescope(r, d, 0.0, TDV)){
 
-    DEBUGF(INDI::Logger::DBG_SESSION, "Slewing to RA: %s - DEC: %s", RAStr, DecStr);
+        LocalHourAngleDeclinationFromTelescopeDirectionVector(TDV, RaDec);
 
+        double LST = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+        RaDec.ra = (RaDec.ra * 24.0) / 360.0;
+        RaDec.ra = range24(LST - RaDec.ra);
 
-    if (slew_pmc8(PortFD, r, d) == false)
+        fs_sexa(RAStr, RaDec.ra, 2, 3600);
+        fs_sexa(DecStr, RaDec.dec, 2, 3600);
+        DEBUGF(INDI::Logger::DBG_SESSION, "Aligned to RA: %s - DEC: %s", RAStr, DecStr);
+
+        LOGF_INFO("Align C(%g, %g) -> S(%g, %g)", r, d, RaDec.ra, RaDec.dec);
+    }
+    else {
+        RaDec.ra = r;
+        RaDec.dec = d;
+    }
+
+    if (slew_pmc8(PortFD, RaDec.ra, RaDec.dec) == false)
     {
         LOG_ERROR("Failed to slew.");
         return false;
     }
+
+    // update values for sim
+    targetRA  = RaDec.ra;
+    targetDEC = RaDec.dec;
 
     TrackState = SCOPE_SLEWING;
 
@@ -477,29 +537,54 @@ bool PMC8::Goto(double r, double d)
 
 bool PMC8::Sync(double ra, double dec)
 {
-
-    targetRA  = ra;
-    targetDEC = dec;
     char RAStr[64] = {0}, DecStr[64] = {0};
-
-    fs_sexa(RAStr, targetRA, 2, 3600);
-    fs_sexa(DecStr, targetDEC, 2, 3600);
-
+    fs_sexa(RAStr, ra, 2, 3600);
+    fs_sexa(DecStr, dec, 2, 3600);
     DEBUGF(INDI::Logger::DBG_SESSION, "Syncing to RA: %s - DEC: %s", RAStr, DecStr);
 
-    if (sync_pmc8(PortFD, ra, dec) == false)
-    {
-        LOG_ERROR("Failed to sync.");
+    // get coords from scope
+    ln_equ_posn eq { 0, 0 };
+    if (!get_pmc8_coords(PortFD, eq.ra, eq.dec)){
+        LOG_ERROR("Failed to get telescope coordinates.");
+        return false;
     }
 
-    EqNP.s     = IPS_OK;
+    fs_sexa(RAStr, eq.ra, 2, 3600);
+    fs_sexa(DecStr, eq.dec, 2, 3600);
+    DEBUGF(INDI::Logger::DBG_SESSION, "Scope has RA: %s - DEC: %s", RAStr, DecStr);
 
-    currentRA  = ra;
-    currentDEC = dec;
+    double LST = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
 
-    NewRaDec(currentRA, currentDEC);
+    ln_equ_posn RaDec { 0, 0 };
+    RaDec.ra   = (LST - eq.ra) * 360.0 / 24.0;
+    RaDec.dec  = eq.dec;
 
-    return true;
+    LOGF_INFO("Synching S(%g, %g) -> C(%g, %g)", RaDec.ra, RaDec.dec, ra, dec);
+
+    AlignmentDatabaseEntry NewEntry;
+    NewEntry.ObservationJulianDate = ln_get_julian_from_sys();
+    NewEntry.RightAscension        = ra;
+    NewEntry.Declination           = dec;
+    NewEntry.TelescopeDirection    = TelescopeDirectionVectorFromLocalHourAngleDeclination(RaDec);
+    NewEntry.PrivateDataSize       = 0;
+
+    if (!CheckForDuplicateSyncPoint(NewEntry))
+    {
+
+        GetAlignmentDatabase().push_back(NewEntry);
+
+        // Tell the client about size change
+        UpdateSize();
+
+        // Tell the math plugin to reinitialise
+        Initialise(this);
+
+        return true;
+    }
+
+    LOG_INFO("Sync point not added. Duplicate?");
+
+    return false;
 }
 
 bool PMC8::Abort()
@@ -603,6 +688,9 @@ bool PMC8::updateTime(ln_date *utc, double utc_offset)
 bool PMC8::updateLocation(double latitude, double longitude, double elevation)
 {
     INDI_UNUSED(elevation);
+
+    // Aligment location update
+    UpdateLocation(latitude, longitude, elevation);
 
     if (longitude > 180)
         longitude -= 360;
@@ -917,6 +1005,8 @@ bool PMC8::saveConfigItems(FILE *fp)
 {
     INDI::Telescope::saveConfigItems(fp);
 
+    SaveAlignmentConfigProperties(fp);
+
     IUSaveConfigSwitch(fp, &MountTypeSP);
     return true;
 }
@@ -956,48 +1046,56 @@ void PMC8::mountSim()
 
         case SCOPE_SLEWING:
         case SCOPE_PARKING:
+            currentRA = targetRA;
+            currentDEC = targetDEC;
+
+            if (TrackState == SCOPE_SLEWING)
+                set_pmc8_sim_system_status(ST_TRACKING);
+            else
+                set_pmc8_sim_system_status(ST_PARKED);
+
             /* slewing - nail it when both within one pulse @ SLEWRATE */
-            nlocked = 0;
+//            nlocked = 0;
 
-            dx = targetRA - currentRA;
+//            dx = targetRA - currentRA;
 
-            // Take shortest path
-            if (fabs(dx) > 12)
-                dx *= -1;
+//            // Take shortest path
+//            if (fabs(dx) > 12)
+//                dx *= -1;
 
-            if (fabs(dx) <= da)
-            {
-                currentRA = targetRA;
-                nlocked++;
-            }
-            else if (dx > 0)
-                currentRA += da / 15.;
-            else
-                currentRA -= da / 15.;
+//            if (fabs(dx) <= da)
+//            {
+//                currentRA = targetRA;
+//                nlocked++;
+//            }
+//            else if (dx > 0)
+//                currentRA += da / 15.;
+//            else
+//                currentRA -= da / 15.;
 
-            if (currentRA < 0)
-                currentRA += 24;
-            else if (currentRA > 24)
-                currentRA -= 24;
+//            if (currentRA < 0)
+//                currentRA += 24;
+//            else if (currentRA > 24)
+//                currentRA -= 24;
 
-            dx = targetDEC - currentDEC;
-            if (fabs(dx) <= da)
-            {
-                currentDEC = targetDEC;
-                nlocked++;
-            }
-            else if (dx > 0)
-                currentDEC += da;
-            else
-                currentDEC -= da;
+//            dx = targetDEC - currentDEC;
+//            if (fabs(dx) <= da)
+//            {
+//                currentDEC = targetDEC;
+//                nlocked++;
+//            }
+//            else if (dx > 0)
+//                currentDEC += da;
+//            else
+//                currentDEC -= da;
 
-            if (nlocked == 2)
-            {
-                if (TrackState == SCOPE_SLEWING)
-                    set_pmc8_sim_system_status(ST_TRACKING);
-                else
-                    set_pmc8_sim_system_status(ST_PARKED);
-            }
+//            if (nlocked == 2)
+//            {
+//                if (TrackState == SCOPE_SLEWING)
+//                    set_pmc8_sim_system_status(ST_TRACKING);
+//                else
+//                    set_pmc8_sim_system_status(ST_PARKED);
+//            }
 
             break;
 

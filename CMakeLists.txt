@@ -797,7 +797,7 @@ SET(pmc8_SRC
 
 add_executable(indi_pmc8_telescope ${pmc8_SRC})
 
-target_link_libraries(indi_pmc8_telescope indidriver)
+target_link_libraries(indi_pmc8_telescope indidriver AlignmentDriver)
 
 install(TARGETS indi_pmc8_telescope RUNTIME DESTINATION bin)
 
