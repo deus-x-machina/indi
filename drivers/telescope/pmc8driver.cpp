@@ -421,8 +421,7 @@ bool get_pmc8_tracking_rate_axis(int fd, PMC8_AXIS axis, int &rate)
     strcpy(num_str, "0X");
     strncat(num_str, response+5, 6);
 
-    // divide by multiplier of 25 as per spec
-    rate = (int)(strtol(num_str, nullptr, 0) / 25);
+    rate = (int)strtol(num_str, nullptr, 0);
 
     return true;
 }
@@ -581,16 +580,16 @@ int convert_movespeedindex_to_rate(int mode)
     switch (mode)
     {
         case 0:
-            r = 5*15;
+            r = 2*15;
             break;
         case 1:
-            r = 20*15;
+            r = 8*15;
             break;
         case 2:
-            r = 50*15;
+            r = 16*15;
             break;
         case 3:
-            r = 100*15;
+            r = 32*15;
             break;
         default:
             r = 0;

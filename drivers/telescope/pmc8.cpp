@@ -150,10 +150,10 @@ bool PMC8::initProperties()
     //    TrackRateN[AXIS_DE].max = 0.01;
 
     // relabel move speeds
-    strcpy(SlewRateSP.sp[0].label, "5x");
-    strcpy(SlewRateSP.sp[1].label, "20x");
-    strcpy(SlewRateSP.sp[2].label, "50x");
-    strcpy(SlewRateSP.sp[3].label, "100x");
+    strcpy(SlewRateSP.sp[0].label, "2x");
+    strcpy(SlewRateSP.sp[1].label, "8x");
+    strcpy(SlewRateSP.sp[2].label, "16x");
+    strcpy(SlewRateSP.sp[3].label, "32x");
 
     /* How fast do we guide compared to sidereal rate */
     IUFillNumber(&GuideRateN[0], "GUIDE_RATE", "x Sidereal", "%g", 0.1, 1.0, 0.1, 0.5);
