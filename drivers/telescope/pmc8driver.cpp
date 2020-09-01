@@ -583,13 +583,13 @@ int convert_movespeedindex_to_rate(int mode)
             r = 2*15;
             break;
         case 1:
-            r = 8*15;
+            r = 4*15;
             break;
         case 2:
-            r = 16*15;
+            r = 8*15;
             break;
         case 3:
-            r = 32*15;
+            r = 16*15;
             break;
         default:
             r = 0;
